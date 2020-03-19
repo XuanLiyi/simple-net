@@ -155,6 +155,7 @@ print("test accuracy:{:.6f}".format(test_acc))
 test_pred=sess.run(pred,feed_dict={x:Xtest_normalize})
 prediction_result=sess.run(tf.argmax(test_pred,1))
 label_dict={0:"airplane",1:"automobile",2:"bird",3:"cat",4:"deer",5:"dog",6:"frog",7:"horse",8:"ship",9:"truck"}
+
 def plot_images__labels_prediction(images,labels,prediction,index,num=10):
     fig=plt.gcf()
     fig.set_size_inches(12,6)
