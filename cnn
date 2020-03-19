@@ -1,0 +1,172 @@
+import urllib.request
+import os
+import tarfile
+
+url='http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'
+filepath='data/cifar-10-python.tar.gz'
+if not os.path.isfile(filepath):
+    result=urllib.request.urlretrieve(url,filepath)
+    print('downloaded:',result)
+else:
+    print('Data file already exists')
+if not os.path.exists("data/cifar-10-batches-py"):
+    tfile=tarfile.open("data/cifar-10-python.tar.gz",'r:gz')
+    result=tfile.extractall('data/')
+    print('Extract to ./data/cifar-10-batches-py/')
+else:
+    print('Directory already exists.')
+
+import os
+import numpy as np
+import pickle as p
+def load_CIFAR_batch(filename):
+    with open(filename,'rb') as f:
+        data_dict=p.load(f,encoding='bytes')
+        images=data_dict[b'data']
+        labels=data_dict[b'labels']
+        images=images.reshape([10000,3,32,32])
+        images=images.transpose([0,2,3,1])
+        labels=np.array(labels)
+        return images,labels
+
+def load_CIFAR_data(data_dir):
+    images_train=[]
+    labels_train=[]
+    for i in range(5):
+        f=os.path.join(data_dir,'data_batch_%d'%(i+1))
+        print('loading',f)
+        image_batch,label_batch=load_CIFAR_batch(f)
+        images_train.append(image_batch)
+        labels_train.append(label_batch)
+        Xtrain=np.concatenate(images_train)
+        Ytrain=np.concatenate(labels_train)
+        del image_batch,label_batch
+    Xtest,Ytest=load_CIFAR_batch(os.path.join(data_dir,'test_batch'))
+    print('finished loadding CIFAR-10 data')
+    return Xtrain,Ytrain,Xtest,Ytest
+data_dir='data/cifar-10-batches-py/'
+Xtrain,Ytrain,Xtest,Ytest=load_CIFAR_data(data_dir)
+
+Xtrain_normalize=Xtrain.astype('float32')/255.0
+Xtest_normalize=Xtest.astype('float32')/255.0
+
+from sklearn.preprocessing import OneHotEncoder
+encoder=OneHotEncoder(sparse=False)
+yy=[[0],[1],[2],[3],[4],[5],[6],[7],[8],[9]]
+encoder.fit(yy)
+Ytrain_reshape=Ytrain.reshape(-1,1)
+Ytrain_onehot=encoder.transform(Ytrain_reshape)
+Ytest_reshape=Ytest.reshape(-1,1)
+Ytest_onehot=encoder.transform(Ytest_reshape)
+
+import tensorflow as tf
+tf.reset_default_graph()
+
+def weight(shape):
+    return tf.Variable(tf.truncated_normal(shape,stddev=0.1),name='W')
+def bias(shape):
+    return tf.Variable(tf.constant(0.1,shape=shape),name='b')
+def conv2d(x,W):
+    return tf.nn.conv2d(x,W,strides=[1,1,1,1],padding='SAME')
+def max_pool_2x2(x):
+    return tf.nn.max_pool(x,ksize=[1,2,2,1],strides=[1,2,2,1],padding='SAME')
+
+with tf.name_scope('input_layer'):
+    x=tf.placeholder('float',shape=[None,32,32,3],name='x')
+
+with tf.name_scope('conv_1'):
+    W1=weight([3,3,3,32])
+    b1=bias([32])
+    conv_1=conv2d(x,W1)+b1
+    conv_1=tf.nn.relu(conv_1)
+
+with tf.name_scope('pool_1'):
+    pool_1=max_pool_2x2(conv_1)
+
+with tf.name_scope('conv_2'):
+    W2=weight([3,3,32,64])
+    b2=bias([64])
+    conv_2=conv2d(pool_1,W2)+b2
+    conv_2=tf.nn.relu(conv_2)
+
+with tf.name_scope('pool_2'):
+    pool_2=max_pool_2x2(conv_2)
+
+with tf.name_scope('fc'):
+    W3=weight([4096,128])
+    b3=bias([128])
+    flat=tf.reshape(pool_2,[-1,4096])
+    h=tf.nn.relu(tf.matmul(flat,W3)+b3)
+    h_dropout=tf.nn.dropout(h,keep_prob=0.8)
+
+with tf.name_scope('out_layer'):
+    W4=weight([128,10])
+    b4=bias([10])
+    pred=tf.nn.softmax(tf.matmul(h_dropout,W4)+b4)
+
+with tf.name_scope('optimizer'):
+    y=tf.placeholder('float',shape=[None,10],name='label')
+    loss_function=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred,labels=y))
+    optimizer=tf.train.AdamOptimizer(learning_rate=0.0001).minimize(loss_function)
+
+with tf.name_scope('evalution'):
+    correct_prediction=tf.equal(tf.argmax(pred,1),tf.argmax(y,1))
+    accuracy=tf.reduce_mean(tf.cast(correct_prediction,"float"))
+
+import os
+from time import time
+train_epochs=25
+batch_size=50
+total_batch=int(len(Xtrain)/batch_size)
+epoch_list=[];
+loss_list=[];accuracy_list=[]
+#epoch=tf.Variable(0,name='epoch',trainable=False)
+startTime=time()
+sess=tf.Session()
+init=tf.global_variables_initializer()
+
+def get_train_batch(number,batch_size):
+    return Xtrain_normalize[number*batch_size:(number+1)*batch_size],Ytrain_onehot[number*batch_size:(number+1)*batch_size]
+for ep in range(train_epochs):
+    for i in range(total_batch):
+        batch_x,batch_y=get_train_batch(i,batch_size)
+        sess.run(optimizer,feed_dict={x:batch_x,y:batch_y})
+        if i%100==0:
+            print("Step{}".format(i),"finished")
+    loss,acc=sess.run([loss_function,accuracy],feed_dict={x:batch_x,y:batch_y})#每一轮最后一批次训练集用来算损失值和准确率？
+    epoch_list.append((ep+1))
+    loss_list.append(loss)
+    accuracy_list.append(acc)
+    print("Train epoch:","%02d"%(ep+1),"Loss=","{:.6f}".format(loss),'Accuracy=',acc)
+duration=time()-startTime
+print("Train finished takes:",duration)
+sess.run(init)
+
+test_totle_batch=int(len(Xtest_normalize)/batch_size)
+test_acc_sum=0.0
+for i in range(test_totle_batch):
+    test_image_batch=Xtest_normalize[i*batch_size:(i+1)*batch_size]
+    test_label_batch=Ytest_onehot[i*batch_size:(i+1)*batch_size]
+    test_batch_acc=sess.run(accuracy,feed_dict={x:test_image_batch,y:test_label_batch})
+    test_acc_sum+=test_batch_acc
+test_acc=float(test_acc_sum/test_totle_batch)
+print("test accuracy:{:.6f}".format(test_acc))
+
+test_pred=sess.run(pred,feed_dict={x:Xtest_normalize})
+prediction_result=sess.run(tf.argmax(test_pred,1))
+label_dict={0:"airplane",1:"automobile",2:"bird",3:"cat",4:"deer",5:"dog",6:"frog",7:"horse",8:"ship",9:"truck"}
+def plot_images__labels_prediction(images,labels,prediction,index,num=10):
+    fig=plt.gcf()
+    fig.set_size_inches(12,6)
+    if num>25:
+        num=25
+    for i in range(0,num):
+        ax=plt.subplot(2,5,i+1)
+        ax.imshow(images[index],cmap='binary')
+        title=str(i)+','+label_dict[labels[index]]
+        if len(prediction)>0:
+            title+='=>'+label_dict[prediction[index]]
+        ax.set_title(title,fontsize=10)
+        index+=1
+    plt.show()
+ plot_images__labels_prediction(Xtest,Ytest,prediction_result,50,10)
